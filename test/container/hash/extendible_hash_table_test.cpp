@@ -10,7 +10,7 @@
 
 namespace bustub {
 
-TEST(ExtendibleHashTableTest, DISABLED_SampleTest) {
+TEST(ExtendibleHashTableTest, SampleTest) {
   auto table = std::make_unique<ExtendibleHashTable<int, std::string>>(2);
 
   table->Insert(1, "a");
@@ -42,7 +42,7 @@ TEST(ExtendibleHashTableTest, DISABLED_SampleTest) {
   EXPECT_FALSE(table->Remove(20));
 }
 
-TEST(ExtendibleHashTableTest, DISABLED_ConcurrentInsertTest) {
+TEST(ExtendibleHashTableTest, ConcurrentInsertTest) {
   const int num_runs = 50;
   const int num_threads = 3;
 
@@ -66,6 +66,72 @@ TEST(ExtendibleHashTableTest, DISABLED_ConcurrentInsertTest) {
       EXPECT_EQ(i, val);
     }
   }
+}
+
+TEST(ExtendibleHashTableTest, ConcurrentInsertFindTest) {
+  const int num_epochs = 10;
+  const int num_threads = 10;
+  const int num_insert = 10;
+
+  /* 运行num_epochs轮以保证结果有效性 */
+  for (int run = 0; run < num_epochs; run++) {
+    auto table = std::make_unique<ExtendibleHashTable<int, int>>(2);
+    std::vector<std::thread> threads_insert;  // 插入线程集合
+    std::vector<std::thread> threads_find;    // 查找线程集合
+    threads_insert.reserve(num_threads);
+    threads_find.reserve(num_threads);
+
+    for (int tid = 0; tid < num_threads; tid++) {
+      /* 累计num_threads个线程，每个线程插入num_insert个pair */
+      threads_insert.emplace_back([tid, &table]() {
+        for (int i = tid * num_insert; i < (tid + 1) * num_insert; i++) {
+          table->Insert(i, i);
+        }
+      });
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+      threads_insert[i].join();
+    }
+
+    /* 累计num_threads个线程，每个线程查找num_insert个pair */
+    for (int tid = 0; tid < num_threads; tid++) {
+      threads_find.emplace_back([tid, &table]() {
+        for (int i = tid * num_insert; i < (tid + 1) * num_insert; i++) {
+          int val;
+          EXPECT_TRUE(table->Find(i, val));
+        }
+      });
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+      threads_find[i].join();
+    }
+  }
+}
+
+TEST(ExtendibleHashTableTest, GetNumBucketsTest) {
+  auto table = std::make_unique<ExtendibleHashTable<int, std::string>>(2);
+
+  table->Insert(0b0000100, "01");  // 04
+  table->Insert(0b0001100, "02");  // 12
+  table->Insert(0b0010000, "03");  // 16
+  EXPECT_EQ(4, table->GetNumBuckets());
+
+  table->Insert(0b1000000, "04");  // 64
+  table->Insert(0b0011111, "05");  // 31
+  table->Insert(0b0001010, "06");  // 10
+  table->Insert(0b0110011, "07");  // 51
+  EXPECT_EQ(4, table->GetNumBuckets());
+
+  table->Insert(0b0001111, "08");  // 15
+  table->Insert(0b0010010, "09");  // 18
+  table->Insert(0b0010100, "10");  // 20
+  EXPECT_EQ(7, table->GetNumBuckets());
+
+  table->Insert(0b0000111, "11");  // 07
+  table->Insert(0b0010111, "12");  // 23
+  EXPECT_EQ(8, table->GetNumBuckets());
 }
 
 }  // namespace bustub
