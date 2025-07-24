@@ -38,158 +38,116 @@ BufferPoolManagerInstance::~BufferPoolManagerInstance() {
 }
 
 auto BufferPoolManagerInstance::NewPgImp(page_id_t *page_id) -> Page * {
-  std::lock_guard<std::mutex> lock(latch_);
-  frame_id_t frame_id;
-  if (free_list_.empty()) {
-    // No free frames available, try to evict a frame
-    if (!replacer_->Evict(&frame_id)) {
-      // No evictable frames available
-      return nullptr;
-    }
-    // Evict the frame and reset it
-    Page *page = &pages_[frame_id];
-    if (page->IsDirty()) {
-      disk_manager_->WritePage(page->GetPageId(), page->GetData());
-    }
-    page_table_->Remove(page->GetPageId());
-    page->ResetMemory();
-  } else {
-    // Get a free frame from the free list
+  std::scoped_lock<std::mutex> lock(latch_);
+  frame_id_t frame_id = -1;
+  if (!free_list_.empty()) {
     frame_id = free_list_.front();
     free_list_.pop_front();
+  } else if (replacer_->Evict(&frame_id)) {
+    if (pages_[frame_id].IsDirty()) {
+      disk_manager_->WritePage(pages_[frame_id].GetPageId(), pages_[frame_id].GetData());
+    }
+    page_table_->Remove(pages_[frame_id].GetPageId());
+  } else {
+    page_id = nullptr;
+    return nullptr;
   }
-
-  // Allocate a new page id
   *page_id = AllocatePage();
-  if (*page_id == INVALID_PAGE_ID) {
-    return nullptr;  // Allocation failed
-  }
-
-  Page *new_page = &pages_[frame_id];
-  new_page->ResetMemory();
-  new_page->page_id_ = *page_id;
-  new_page->pin_count_ = 1;  // Pin the new page
-  new_page->is_dirty_ = false;
-
   page_table_->Insert(*page_id, frame_id);
+  pages_[frame_id].ResetMemory();
+  pages_[frame_id].page_id_ = *page_id;
+  pages_[frame_id].pin_count_ = 1;
+  pages_[frame_id].is_dirty_ = false;
   replacer_->RecordAccess(frame_id);
-  replacer_->SetEvictable(frame_id, false);  // Pin the frame so it won't be evicted
-
-  return new_page;
+  replacer_->SetEvictable(frame_id, false);
+  return &pages_[frame_id];
 }
 
 auto BufferPoolManagerInstance::FetchPgImp(page_id_t page_id) -> Page * {
-  std::lock_guard<std::mutex> lock(latch_);
-  frame_id_t frame_id;
-  // 1. Search the buffer pool for the page
+  assert(page_id != INVALID_PAGE_ID);
+  std::scoped_lock<std::mutex> lock(latch_);
+  frame_id_t frame_id = -1;
   if (page_table_->Find(page_id, frame_id)) {
-    // Page found, pin it and return
-    Page *page = &pages_[frame_id];
-    page->pin_count_++;
     replacer_->RecordAccess(frame_id);
-    return page;
+    replacer_->SetEvictable(frame_id, false);
+    pages_[frame_id].pin_count_++;
+    return &pages_[frame_id];
   }
-
-  // 2. Page not found, try to evict a frame
-  if (free_list_.empty()) {
-    // No free frames available, try to evict a frame
-    if (!replacer_->Evict(&frame_id)) {
-      // No evictable frames available
-      return nullptr;
-    }
-    // Evict the frame and reset it
-    Page *page = &pages_[frame_id];
-    if (page->IsDirty()) {
-      disk_manager_->WritePage(page->GetPageId(), page->GetData());
-    }
-    page_table_->Remove(page->GetPageId());
-    page->ResetMemory();
-  } else {
-    // Get a free frame from the free list
+  if (!free_list_.empty()) {
     frame_id = free_list_.front();
     free_list_.pop_front();
+  } else if (replacer_->Evict(&frame_id)) {
+    if (pages_[frame_id].IsDirty()) {
+      disk_manager_->WritePage(pages_[frame_id].GetPageId(), pages_[frame_id].GetData());
+    }
+    page_table_->Remove(pages_[frame_id].GetPageId());
+  } else {
+    return nullptr;
   }
-
-  // 3. Read the page from disk
-  Page *new_page = &pages_[frame_id];
-  disk_manager_->ReadPage(page_id, new_page->GetData());
-  new_page->page_id_ = page_id;
-  new_page->pin_count_ = 1;  // Pin the new page
-  new_page->is_dirty_ = false;
   page_table_->Insert(page_id, frame_id);
+  pages_[frame_id].ResetMemory();
+  pages_[frame_id].page_id_ = page_id;
+  pages_[frame_id].pin_count_ = 1;
+  pages_[frame_id].is_dirty_ = false;
+  disk_manager_->ReadPage(page_id, pages_[frame_id].GetData());
   replacer_->RecordAccess(frame_id);
-  replacer_->SetEvictable(frame_id, false);  // Pin the frame so it won't be evicted
-  return new_page;
+  replacer_->SetEvictable(frame_id, false);
+  return &pages_[frame_id];
 }
 
 auto BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) -> bool {
-  std::lock_guard<std::mutex> lock(latch_);
+  std::scoped_lock<std::mutex> lock(latch_);
   frame_id_t frame_id;
-  // Check if the page is in the buffer pool
-  if (!page_table_->Find(page_id, frame_id)) {
-    return false;  // Page not found
+  if (!page_table_->Find(page_id, frame_id) || pages_[frame_id].GetPinCount() == 0) {
+    return false;
   }
-
-  Page *page = &pages_[frame_id];
-  if (page->GetPinCount() <= 0) {
-    return false;  // Page is already unpinned
-  }
-
-  // Decrement pin count and set dirty flag if needed
-  page->pin_count_--;
-  if (is_dirty) {
-    page->is_dirty_ = true;
-  }
-
-  // If pin count reaches zero, make the frame evictable
-  if (page->GetPinCount() == 0) {
+  pages_[frame_id].pin_count_--;
+  pages_[frame_id].is_dirty_ |= is_dirty;
+  if (pages_[frame_id].GetPinCount() == 0) {
     replacer_->SetEvictable(frame_id, true);
   }
-
   return true;
 }
 
 auto BufferPoolManagerInstance::FlushPgImp(page_id_t page_id) -> bool {
-  std::lock_guard<std::mutex> lock(latch_);
+  std::scoped_lock<std::mutex> lock(latch_);
   frame_id_t frame_id;
-  if (page_id == INVALID_PAGE_ID || !page_table_->Find(page_id, frame_id)) {
-    return false;  // Page not found or invalid page ID
+  if (!page_table_->Find(page_id, frame_id)) {
+    return false;
   }
-  Page *page = &pages_[frame_id];
-  disk_manager_->WritePage(page->GetPageId(), page->GetData());
-  page->is_dirty_ = false;
+  disk_manager_->WritePage(pages_[frame_id].GetPageId(), pages_[frame_id].GetData());
+  pages_->is_dirty_ = false;
   return true;
 }
-
 void BufferPoolManagerInstance::FlushAllPgsImp() {
-  for (size_t i = 0; i < pool_size_; ++i) {
-    Page *page = &pages_[i];
-    page_id_t page_id = page->GetPageId();
-    FlushPgImp(page_id);
+  frame_id_t tmp;
+  std::scoped_lock<std::mutex> lock(latch_);
+  for (size_t frame_id = 0; frame_id < pool_size_; frame_id++) {
+    if (page_table_->Find(pages_[frame_id].GetPageId(), tmp)) {
+      disk_manager_->WritePage(pages_[frame_id].GetPageId(), pages_[frame_id].GetData());
+      pages_->is_dirty_ = false;
+    }
   }
 }
 
 auto BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) -> bool {
-  std::lock_guard<std::mutex> lock(latch_);
+  std::scoped_lock<std::mutex> lock(latch_);
+  DeallocatePage(page_id);
   frame_id_t frame_id;
-  if (page_id == INVALID_PAGE_ID || !page_table_->Find(page_id, frame_id)) {
-    return true;  // Invalid page ID, nothing to delete
+  if (!page_table_->Find(page_id, frame_id)) {
+    return true;
   }
-
-  Page *page = &pages_[frame_id];
-  if (page->GetPinCount() > 0) {
-    return false;  // Page is pinned, cannot delete
+  if (pages_[frame_id].GetPinCount() > 0) {
+    return false;
   }
-
-  replacer_->Remove(frame_id);       // Remove from replacer
-  free_list_.push_back(frame_id);    // Add frame back to free list
-  page_table_->Remove(page_id);      // Remove from page table
-  page->ResetMemory();               // Reset the page memory
-  page->page_id_ = INVALID_PAGE_ID;  // Mark the page as invalid
-  page->pin_count_ = 0;              // Reset pin count
-  page->is_dirty_ = false;           // Reset dirty flag
-  DeallocatePage(page_id);           // Deallocate the page from disk
-  return true;                       // Successfully deleted the page
+  if (pages_[frame_id].IsDirty()) {
+    disk_manager_->WritePage(pages_[frame_id].GetPageId(), pages_[frame_id].GetData());
+    pages_->is_dirty_ = false;
+  }
+  replacer_->Remove(frame_id);
+  free_list_.push_back(frame_id);
+  page_table_->Remove(page_id);
+  return true;
 }
 
 auto BufferPoolManagerInstance::AllocatePage() -> page_id_t { return next_page_id_++; }

@@ -11,104 +11,76 @@
 //===----------------------------------------------------------------------===//
 
 #include "buffer/lru_k_replacer.h"
-#include <iostream>
 
 namespace bustub {
 
-LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_frames), k_(k) {
-  history_queue_ = std::unordered_map<frame_id_t, std::list<size_t>>();
-  cache_queue_ = std::unordered_map<frame_id_t, std::list<size_t>>();
+LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_frames), k_(k) {}
+
+auto LRUKReplacer::Judge(frame_id_t s, frame_id_t t) -> bool {
+  if (hash_[s].time_.size() < k_ && hash_[t].time_.size() == k_) {
+    return true;
+  }
+  if (hash_[s].time_.size() == k_ && hash_[t].time_.size() < k_) {
+    return false;
+  }
+  return hash_[s].time_.front() < hash_[t].time_.front();
 }
 
 auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
-  std::lock_guard<std::mutex> lock(latch_);
-  // initialize frame_id with an invalid value
-  *frame_id = INVALID_FRAME_ID;
-  current_timestamp_++;
-  if (history_queue_.empty() && cache_queue_.empty()) {
-    return false;
-  }
-  size_t ts = current_timestamp_;
-  if (!history_queue_.empty()) {
-    for (auto kv_pair : history_queue_) {
-      if (evictable_.find(kv_pair.first) != evictable_.end() && kv_pair.second.front() < ts) {
-        *frame_id = kv_pair.first;
-        ts = kv_pair.second.front();
+  std::scoped_lock<std::mutex> lock(latch_);
+  *frame_id = -1;
+  for (const auto &kv : hash_) {
+    if (kv.second.evictable_) {
+      if (*frame_id == -1 || Judge(kv.first, *frame_id)) {
+        *frame_id = kv.first;
       }
     }
   }
-  if (history_queue_.find(*frame_id) != history_queue_.end()) {
-    history_queue_.erase(*frame_id);
-    evictable_.erase(*frame_id);
+  if (*frame_id != -1) {
+    hash_.erase(*frame_id);
+    curr_size_--;
+
     return true;
   }
-  for (auto kv_pair : cache_queue_) {
-    if (evictable_.find(kv_pair.first) != evictable_.end() && kv_pair.second.front() < ts) {
-      *frame_id = kv_pair.first;
-      ts = kv_pair.second.front();
-    }
-  }
-  if (*frame_id == INVALID_FRAME_ID) {
-    return false;
-  }
-  cache_queue_.erase(*frame_id);
-  evictable_.erase(*frame_id);
-  return true;
+  return false;
 }
 
 void LRUKReplacer::RecordAccess(frame_id_t frame_id) {
-  std::lock_guard<std::mutex> lock(latch_);
-  if (frame_id >= static_cast<int>(replacer_size_) || frame_id < 0) {
+  std::scoped_lock<std::mutex> lock(latch_);
+  if (hash_.count(frame_id) == 0 && replacer_size_ == hash_.size()) {
     return;
   }
-
-  if (cache_queue_.find(frame_id) != cache_queue_.end()) {
-    cache_queue_[frame_id].pop_front();
-    cache_queue_[frame_id].push_back(current_timestamp_++);
-    return;
+  if (hash_[frame_id].time_.size() == k_) {
+    hash_[frame_id].time_.pop();
   }
-
-  if (history_queue_.find(frame_id) == history_queue_.end()) {
-    history_queue_[frame_id] = std::list<size_t>();
-    evictable_[frame_id] = true;
-  }
-
-  // insert into history queue
-  history_queue_[frame_id].push_back(current_timestamp_++);
-
-  // move it to cache queue if accessed more than k times
-  if (history_queue_[frame_id].size() >= k_) {
-    cache_queue_[frame_id] = history_queue_[frame_id];
-    history_queue_.erase(frame_id);
-  }
+  hash_[frame_id].time_.push(current_timestamp_++);
 }
 
 void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
-  std::lock_guard<std::mutex> lock(latch_);
-  current_timestamp_++;
-  if (set_evictable && history_queue_.find(frame_id) == history_queue_.end() &&
-      cache_queue_.find(frame_id) == cache_queue_.end()) {
-    return;
-  }
-  if (set_evictable) {
-    evictable_[frame_id] = true;
-  } else {
-    evictable_.erase(frame_id);
+  std::scoped_lock<std::mutex> lock(latch_);
+  if (hash_.count(frame_id) != 0) {
+    bool flag = hash_[frame_id].evictable_;
+    hash_[frame_id].evictable_ = set_evictable;
+    if (!flag && set_evictable) {
+      curr_size_++;
+    } else if (flag && !set_evictable) {
+      curr_size_--;
+    }
   }
 }
 
 void LRUKReplacer::Remove(frame_id_t frame_id) {
-  std::lock_guard<std::mutex> lock(latch_);
-  current_timestamp_++;
-
-  history_queue_.erase(frame_id);
-  cache_queue_.erase(frame_id);
-  evictable_.erase(frame_id);
+  std::scoped_lock<std::mutex> lock(latch_);
+  if (hash_.count(frame_id) == 0) {
+    return;
+  }
+  if (!hash_[frame_id].evictable_) {
+    throw "Remove a non-evictable frame!";
+  }
+  hash_.erase(frame_id);
+  curr_size_--;
 }
 
-auto LRUKReplacer::Size() -> size_t {
-  std::lock_guard<std::mutex> lock(latch_);
-  return evictable_.size();
-}
+auto LRUKReplacer::Size() -> size_t { return curr_size_; }
 
 }  // namespace bustub
