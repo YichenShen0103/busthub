@@ -26,6 +26,7 @@ void InsertExecutor::Init() {
   table_heap_ = table_info_->table_.get();
   table_iterator_ = std::make_unique<TableIterator>(table_heap_->Begin(exec_ctx_->GetTransaction()));
   child_executor_->Init();
+  successful_ = false;  // Reset the successful flag
 }
 
 auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool {

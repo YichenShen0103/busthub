@@ -16,7 +16,7 @@
 namespace bustub {
 
 SeqScanExecutor::SeqScanExecutor(ExecutorContext *exec_ctx, const SeqScanPlanNode *plan)
-    : AbstractExecutor(exec_ctx), plan_(plan), table_heap_(nullptr), table_iterator_(nullptr) {}
+    : AbstractExecutor(exec_ctx), plan_(plan) {}
 
 void SeqScanExecutor::Init() {
   auto table_info = exec_ctx_->GetCatalog()->GetTable(plan_->GetTableOid());
