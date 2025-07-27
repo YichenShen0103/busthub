@@ -52,5 +52,13 @@ class TopNExecutor : public AbstractExecutor {
  private:
   /** The topn plan node to be executed */
   const TopNPlanNode *plan_;
+  std::unique_ptr<AbstractExecutor> child_executor_;
+  std::priority_queue<Tuple, std::vector<Tuple>, std::function<bool(const Tuple &, const Tuple &)>>
+      topn_pq_;    // Priority queue to store the top N tuples
+  std::size_t n_;  // The number of top tuples to retain
+
+  // For result iteration
+  std::vector<Tuple> result_tuples_;
+  std::vector<Tuple>::iterator result_iterator_;
 };
 }  // namespace bustub
