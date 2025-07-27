@@ -11,13 +11,29 @@
 //===----------------------------------------------------------------------===//
 
 #include "execution/executors/seq_scan_executor.h"
+// #include "storage/table/table_heap.h"
 
 namespace bustub {
 
-SeqScanExecutor::SeqScanExecutor(ExecutorContext *exec_ctx, const SeqScanPlanNode *plan) : AbstractExecutor(exec_ctx) {}
+SeqScanExecutor::SeqScanExecutor(ExecutorContext *exec_ctx, const SeqScanPlanNode *plan)
+    : AbstractExecutor(exec_ctx), plan_(plan), table_heap_(nullptr), table_iterator_(nullptr) {}
 
-void SeqScanExecutor::Init() { throw NotImplementedException("SeqScanExecutor is not implemented"); }
+void SeqScanExecutor::Init() {
+  auto table_info = exec_ctx_->GetCatalog()->GetTable(plan_->GetTableOid());
+  table_heap_ = table_info->table_.get();
+  table_iterator_ = std::make_unique<TableIterator>(table_heap_->Begin(exec_ctx_->GetTransaction()));
+}
 
-auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool { return false; }
+auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
+  if (*table_iterator_ == table_heap_->End()) {
+    return false;  // No more tuples to scan
+  }
+
+  *tuple = **table_iterator_;
+  *rid = tuple->GetRid();
+  ++(*table_iterator_);  // Move to the next tuple
+
+  return true;  // Successfully retrieved a tuple
+}
 
 }  // namespace bustub

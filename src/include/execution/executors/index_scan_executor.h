@@ -44,5 +44,9 @@ class IndexScanExecutor : public AbstractExecutor {
  private:
   /** The index scan plan node to be executed. */
   const IndexScanPlanNode *plan_;
+
+  BPlusTreeIndexForOneIntegerColumn *tree_{nullptr};  // The B+ tree index
+  TableHeap *table_{nullptr};                         // The table heap associated with the index
+  std::unique_ptr<BPlusTreeIndexIteratorForOneIntegerColumn> index_iter_{nullptr};
 };
 }  // namespace bustub
