@@ -13,6 +13,7 @@
 #pragma once
 
 #include <memory>
+#include <queue>
 #include <vector>
 
 #include "execution/executor_context.h"
