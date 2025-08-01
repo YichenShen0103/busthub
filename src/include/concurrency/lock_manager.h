@@ -301,6 +301,8 @@ class LockManager {
 
  private:
   auto DFS(std::vector<txn_id_t> cycle_vector, bool &is_cycle, txn_id_t *txn_id) -> void;
+  auto AddEdgeInternal(txn_id_t t1, txn_id_t t2) -> void;
+  auto RemoveEdgeInternal(txn_id_t t1, txn_id_t t2) -> void;
 
   /** Fall 2022 */
   /** Structure that holds lock requests for a given table oid */

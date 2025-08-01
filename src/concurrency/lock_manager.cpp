@@ -505,11 +505,15 @@ auto LockManager::UnlockRow(Transaction *txn, const table_oid_t &oid, const RID 
 
 void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {
   std::unique_lock<std::mutex> lock(waits_for_latch_);
+  AddEdgeInternal(t1, t2);
+}
+
+void LockManager::AddEdgeInternal(txn_id_t t1, txn_id_t t2) {
   bool is_present = false;
   for (auto a : waits_for_[t1]) {
     if (a == t2) {
-      break;
       is_present = true;
+      break;
     }
   }
   if (!is_present) {
@@ -520,9 +524,14 @@ void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {
 
 void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {
   std::unique_lock<std::mutex> lock(waits_for_latch_);
-  for (auto iter = waits_for_[t1].begin(); iter != waits_for_[t1].begin(); iter++) {
+  RemoveEdgeInternal(t1, t2);
+}
+
+void LockManager::RemoveEdgeInternal(txn_id_t t1, txn_id_t t2) {
+  for (auto iter = waits_for_[t1].begin(); iter != waits_for_[t1].end(); iter++) {
     if (*iter == t2) {
       iter = waits_for_[t1].erase(iter);
+      break;
     }
   }
 }
@@ -538,15 +547,15 @@ auto LockManager::DFS(std::vector<txn_id_t> cycle_vector, bool &is_cycle, txn_id
     auto iter = std::find(cycle_vector.begin(), cycle_vector.end(), txn);
     if (iter != cycle_vector.end()) {
       is_cycle = true;
-      *txn_id = *iter;
-      while (iter != cycle_vector.end()) {
-        if (*txn_id < *iter) {
-          *txn_id = *iter;
+      *txn_id = txn;
+      for (auto cycle_iter = iter; cycle_iter != cycle_vector.end(); ++cycle_iter) {
+        if (*cycle_iter > *txn_id) {
+          *txn_id = *cycle_iter;
         }
-        iter++;
       }
       auto transaction = TransactionManager::GetTransaction(*txn_id);
       transaction->SetState(TransactionState::ABORTED);
+      return;
     }
     if (!is_cycle) {
       cycle_vector.push_back(txn);
@@ -592,6 +601,8 @@ void LockManager::RunCycleDetection() {
     std::this_thread::sleep_for(cycle_detection_interval);
     {
       waits_for_latch_.lock();
+      waits_for_.clear();
+
       table_lock_map_latch_.lock();
       for (const auto &table_pairs : table_lock_map_) {
         table_pairs.second->latch_.lock();
@@ -599,7 +610,7 @@ void LockManager::RunCycleDetection() {
           for (auto j_request : table_pairs.second->request_queue_) {
             if (j_request->granted_ && !i_request->granted_ &&
                 !Compatible({j_request->lock_mode_}, i_request->lock_mode_)) {
-              AddEdge(i_request->txn_id_, j_request->txn_id_);
+              AddEdgeInternal(i_request->txn_id_, j_request->txn_id_);
             }
           }
         }
@@ -614,7 +625,7 @@ void LockManager::RunCycleDetection() {
           for (auto j_request : row_pairs.second->request_queue_) {
             if (j_request->granted_ && !i_request->granted_ &&
                 !Compatible({j_request->lock_mode_}, i_request->lock_mode_)) {
-              AddEdge(i_request->txn_id_, j_request->txn_id_);
+              AddEdgeInternal(i_request->txn_id_, j_request->txn_id_);
             }
           }
         }
@@ -625,7 +636,7 @@ void LockManager::RunCycleDetection() {
       txn_id_t txn_id;
       while (HasCycle(&txn_id)) {
         for (const auto &wait : waits_for_) {
-          RemoveEdge(wait.first, txn_id);
+          RemoveEdgeInternal(wait.first, txn_id);
         }
         waits_for_.erase(txn_id);
         table_lock_map_latch_.lock();
