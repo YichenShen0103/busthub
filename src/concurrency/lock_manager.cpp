@@ -23,16 +23,16 @@ namespace bustub {
 auto DeleteTxnLockSetForRow(Transaction *txn, LockManager::LockMode &lock_mode, const table_oid_t &oid, const RID &rid)
     -> void {
   if (lock_mode == LockManager::LockMode::SHARED) {
-    (*txn->GetSharedRowLockSet())[oid].erase(rid);
-    if ((*txn->GetSharedRowLockSet())[oid].empty()) {
-      (*txn->GetSharedRowLockSet()).erase(oid);
+    txn->GetSharedRowLockSet()->at(oid).erase(rid);
+    if (txn->GetSharedRowLockSet()->at(oid).empty()) {
+      txn->GetSharedRowLockSet()->erase(oid);
     }
     return;
   }
   if (lock_mode == LockManager::LockMode::EXCLUSIVE) {
-    (*txn->GetExclusiveRowLockSet())[oid].erase(rid);
-    if ((*txn->GetExclusiveRowLockSet())[oid].empty()) {
-      (*txn->GetExclusiveRowLockSet()).erase(oid);
+    txn->GetExclusiveRowLockSet()->at(oid).erase(rid);
+    if (txn->GetExclusiveRowLockSet()->at(oid).empty()) {
+      txn->GetExclusiveRowLockSet()->erase(oid);
     }
     return;
   }
@@ -61,7 +61,8 @@ auto Compatible(const std::set<LockManager::LockMode> &granted_set, const LockMa
   if (lock_mode == LockManager::LockMode::EXCLUSIVE) {
     return granted_set.empty();
   }
-  return false;  // If the lock mode is not recognized, return false
+
+  return false;
 }
 
 auto AddTxnLockSetForTable(Transaction *txn, LockManager::LockMode &lock_mode, const table_oid_t &oid) -> void {
@@ -260,11 +261,8 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
 
 auto LockManager::UnlockTable(Transaction *txn, const table_oid_t &oid) -> bool {
   // 1 Check if the transaction holds a lock on any row in the table
-  if (txn->GetSharedRowLockSet()->find(oid) != txn->GetSharedRowLockSet()->end() ||
-      txn->GetExclusiveRowLockSet()->find(oid) != txn->GetExclusiveRowLockSet()->end()) {
-    // If the transaction holds locks on rows, abort it
+  if (!(*txn->GetSharedRowLockSet())[oid].empty() || !(*txn->GetExclusiveRowLockSet())[oid].empty()) {
     txn->SetState(TransactionState::ABORTED);
-    table_lock_map_latch_.unlock();
     throw TransactionAbortException(txn->GetTransactionId(), AbortReason::TABLE_UNLOCKED_BEFORE_UNLOCKING_ROWS);
   }
 
@@ -452,14 +450,14 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
   }
 
   while (!row_lock_request_queue->GrantLockForRow(txn, lock_mode)) {
-    if (lock_request_queue->upgrading_ == txn->GetTransactionId()) {
-      lock_request_queue->upgrading_ = INVALID_TXN_ID;
+    if (row_lock_request_queue->upgrading_ == txn->GetTransactionId()) {
+      row_lock_request_queue->upgrading_ = INVALID_TXN_ID;
     }
-    lock_request_queue->cv_.wait(lock);
+    row_lock_request_queue->cv_.wait(lock);
     if (txn->GetState() == TransactionState::ABORTED) {
-      lock_request_queue->request_queue_.remove(new_lock_request);
+      row_lock_request_queue->request_queue_.remove(new_lock_request);
       delete new_lock_request;
-      lock_request_queue->cv_.notify_all();
+      row_lock_request_queue->cv_.notify_all();
       return false;
     }
   }
@@ -489,8 +487,9 @@ auto LockManager::UnlockRow(Transaction *txn, const table_oid_t &oid, const RID 
            txn->GetIsolationLevel() == IsolationLevel::READ_UNCOMMITTED && (iter->lock_mode_ == LockMode::EXCLUSIVE))) {
         txn->SetState(TransactionState::SHRINKING);
       }
-      lock_request_queue->request_queue_.erase(it);  // Erase the iterator safely
-      DeleteTxnLockSetForRow(txn, iter->lock_mode_, oid, rid);
+      auto lock_mode = iter->lock_mode_;                 // Save lock mode before deleting
+      lock_request_queue->request_queue_.erase(it);      // Erase the iterator safely
+      DeleteTxnLockSetForRow(txn, lock_mode, oid, rid);  // Use saved lock mode
       delete iter;
       break;
     }

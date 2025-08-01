@@ -232,13 +232,9 @@ void TwoPLTest1() {
 
   // Need to call txn_mgr's abort
   txn_mgr.Abort(txn);
-  std::cout << "ok8.1" << std::endl;
   CheckAborted(txn);
-  std::cout << "ok8.2" << std::endl;
   CheckTxnRowLockSize(txn, oid, 0, 0);
-  std::cout << "ok8.3" << std::endl;
   CheckTableLockSizes(txn, 0, 0, 0, 0, 0);
-  std::cout << "ok" << std::endl;
 
   delete txn;
 }
