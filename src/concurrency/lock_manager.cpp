@@ -128,8 +128,6 @@ auto CheckUpgradeCompatibility(LockManager::LockMode old_mode, LockManager::Lock
     case LockManager::LockMode::INTENTION_SHARED:
       return true;
     case LockManager::LockMode::SHARED:
-      return new_mode == LockManager::LockMode::EXCLUSIVE ||
-             new_mode == LockManager::LockMode::SHARED_INTENTION_EXCLUSIVE;
     case LockManager::LockMode::INTENTION_EXCLUSIVE:
       return new_mode == LockManager::LockMode::EXCLUSIVE ||
              new_mode == LockManager::LockMode::SHARED_INTENTION_EXCLUSIVE;
@@ -160,9 +158,7 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
       txn->SetState(TransactionState::ABORTED);
       throw TransactionAbortException(txn->GetTransactionId(), AbortReason::LOCK_ON_SHRINKING);
     }
-  }
-  // 2.2 READ_COMMITTED
-  else if (txn->GetIsolationLevel() == IsolationLevel::READ_COMMITTED) {
+  } else if (txn->GetIsolationLevel() == IsolationLevel::READ_COMMITTED) {  // 2.2 READ_COMMITTED
     if (txn->GetState() == TransactionState::SHRINKING) {
       // If the transaction is in SHRINKING state, it can only take IS or S locks
       if (lock_mode != LockMode::INTENTION_SHARED && lock_mode != LockMode::SHARED) {
@@ -170,9 +166,7 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
         throw TransactionAbortException(txn->GetTransactionId(), AbortReason::LOCK_ON_SHRINKING);
       }
     }
-  }
-  // 2.3 REPEATABLE_READ
-  else if (txn->GetIsolationLevel() == IsolationLevel::REPEATABLE_READ) {
+  } else if (txn->GetIsolationLevel() == IsolationLevel::REPEATABLE_READ) {  // 2.3 REPEATABLE_READ
     if (txn->GetState() == TransactionState::SHRINKING) {
       // If the transaction is in SHRINKING state, it cannot take any locks
       txn->SetState(TransactionState::ABORTED);
@@ -204,36 +198,34 @@ auto LockManager::LockTable(Transaction *txn, LockMode lock_mode, const table_oi
         // If the lock mode is the same, just return true
         lock_request_queue->latch_.unlock();
         return true;
-      } else {
-        // If the lock mode is different, check if it's an upgrade request and if it's compatible
-        if (CheckUpgradeCompatibility(request->lock_mode_, lock_mode)) {
-          if (lock_request_queue->upgrading_ != INVALID_TXN_ID) {
-            // If another transaction is already upgrading, abort this transaction
-            txn->SetState(TransactionState::ABORTED);
-            lock_request_queue->latch_.unlock();
-            throw TransactionAbortException(txn->GetTransactionId(), AbortReason::UPGRADE_CONFLICT);
-          }
-          // If compatible, update the lock mode
-          lock_request_queue->upgrading_ = txn->GetTransactionId();
-
-          // Remove the old request safely using iterator
-          it = lock_request_queue->request_queue_.erase(it);
-
-          // Remove the old lock mode from the transaction's lock set
-          DeleteTxnLockSetForTable(txn, request->lock_mode_, oid);
-
-          // Safe delete after erasing from list
-          delete request;
-
-          found = true;
-          break;  // Exit the loop since we found the transaction
-        } else {
-          // If not compatible, abort the transaction
+      }
+      // If the lock mode is different, check if it's an upgrade request and if it's compatible
+      if (CheckUpgradeCompatibility(request->lock_mode_, lock_mode)) {
+        if (lock_request_queue->upgrading_ != INVALID_TXN_ID) {
+          // If another transaction is already upgrading, abort this transaction
           txn->SetState(TransactionState::ABORTED);
           lock_request_queue->latch_.unlock();
-          throw TransactionAbortException(txn->GetTransactionId(), AbortReason::INCOMPATIBLE_UPGRADE);
+          throw TransactionAbortException(txn->GetTransactionId(), AbortReason::UPGRADE_CONFLICT);
         }
+        // If compatible, update the lock mode
+        lock_request_queue->upgrading_ = txn->GetTransactionId();
+
+        // Remove the old request safely using iterator
+        it = lock_request_queue->request_queue_.erase(it);
+
+        // Remove the old lock mode from the transaction's lock set
+        DeleteTxnLockSetForTable(txn, request->lock_mode_, oid);
+
+        // Safe delete after erasing from list
+        delete request;
+
+        found = true;
+        break;  // Exit the loop since we found the transaction
       }
+      // If not compatible, abort the transaction
+      txn->SetState(TransactionState::ABORTED);
+      lock_request_queue->latch_.unlock();
+      throw TransactionAbortException(txn->GetTransactionId(), AbortReason::INCOMPATIBLE_UPGRADE);
     }
   }
   // If the transaction is not found in the queue, create a new lock request
@@ -275,9 +267,8 @@ auto LockManager::UnlockTable(Transaction *txn, const table_oid_t &oid) -> bool 
     txn->SetState(TransactionState::ABORTED);
     table_lock_map_latch_.unlock();
     throw TransactionAbortException(txn->GetTransactionId(), AbortReason::ATTEMPTED_UNLOCK_BUT_NO_LOCK_HELD);
-  } else {
-    lock_request_queue = it->second;
   }
+  lock_request_queue = it->second;
   table_lock_map_latch_.unlock();  // Unlock the map latch after accessing the queue
 
   // 3 Remove the transaction from the lock request queue
@@ -335,9 +326,7 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
       txn->SetState(TransactionState::ABORTED);
       throw TransactionAbortException(txn->GetTransactionId(), AbortReason::LOCK_ON_SHRINKING);
     }
-  }
-  // 3.2 READ_COMMITTED
-  else if (txn->GetIsolationLevel() == IsolationLevel::READ_COMMITTED) {
+  } else if (txn->GetIsolationLevel() == IsolationLevel::READ_COMMITTED) {  // 3.2 READ_COMMITTED
     if (txn->GetState() == TransactionState::SHRINKING) {
       // If the transaction is in SHRINKING state, it can only take IS or S locks
       if (lock_mode != LockMode::SHARED) {
@@ -345,9 +334,7 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
         throw TransactionAbortException(txn->GetTransactionId(), AbortReason::LOCK_ON_SHRINKING);
       }
     }
-  }
-  // 3.3 REPEATABLE_READ
-  else if (txn->GetIsolationLevel() == IsolationLevel::REPEATABLE_READ) {
+  } else if (txn->GetIsolationLevel() == IsolationLevel::REPEATABLE_READ) {  // 3.3 REPEATABLE_READ
     if (txn->GetState() == TransactionState::SHRINKING) {
       // If the transaction is in SHRINKING state, it cannot take any locks
       txn->SetState(TransactionState::ABORTED);
@@ -415,30 +402,28 @@ auto LockManager::LockRow(Transaction *txn, LockMode lock_mode, const table_oid_
       // The transaction already exists in the queue
       if (request->lock_mode_ == lock_mode) {
         return true;  // If the lock mode is the same, just return true
-      } else {
-        // If the lock mode is different, check if it's a upgrade request and if it's compatible
-        if (CheckUpgradeCompatibility(request->lock_mode_, lock_mode)) {
-          if (row_lock_request_queue->upgrading_ != INVALID_TXN_ID) {
-            // If another transaction is already upgrading, abort this transaction
-            txn->SetState(TransactionState::ABORTED);
-            row_lock_request_queue->latch_.unlock();
-            throw TransactionAbortException(txn->GetTransactionId(), AbortReason::UPGRADE_CONFLICT);
-          }
-          // If compatible, update the lock mode, first delete the old request, then insert the new request to the queue
-          row_lock_request_queue->upgrading_ = txn->GetTransactionId();
-          row_lock_request_queue->request_queue_.erase(iter);  // Erase the iterator safely
-          DeleteTxnLockSetForRow(txn, request->lock_mode_, oid,
-                                 rid);  // Remove the old lock mode from the transaction's lock set
-          delete request;               // Delete the old request
-          found = true;                 // Mark that we found the transaction
-          break;                        // Exit the loop since we found the transaction
-        } else {
-          // If not compatible, abort the transaction
+      }
+      // If the lock mode is different, check if it's a upgrade request and if it's compatible
+      if (CheckUpgradeCompatibility(request->lock_mode_, lock_mode)) {
+        if (row_lock_request_queue->upgrading_ != INVALID_TXN_ID) {
+          // If another transaction is already upgrading, abort this transaction
           txn->SetState(TransactionState::ABORTED);
           row_lock_request_queue->latch_.unlock();
-          throw TransactionAbortException(txn->GetTransactionId(), AbortReason::INCOMPATIBLE_UPGRADE);
+          throw TransactionAbortException(txn->GetTransactionId(), AbortReason::UPGRADE_CONFLICT);
         }
+        // If compatible, update the lock mode, first delete the old request, then insert the new request to the queue
+        row_lock_request_queue->upgrading_ = txn->GetTransactionId();
+        row_lock_request_queue->request_queue_.erase(iter);  // Erase the iterator safely
+        DeleteTxnLockSetForRow(txn, request->lock_mode_, oid,
+                               rid);  // Remove the old lock mode from the transaction's lock set
+        delete request;               // Delete the old request
+        found = true;                 // Mark that we found the transaction
+        break;                        // Exit the loop since we found the transaction
       }
+      // If not compatible, abort the transaction
+      txn->SetState(TransactionState::ABORTED);
+      row_lock_request_queue->latch_.unlock();
+      throw TransactionAbortException(txn->GetTransactionId(), AbortReason::INCOMPATIBLE_UPGRADE);
     }
   }
   // If the transaction is not found in the queue, create a new lock request
