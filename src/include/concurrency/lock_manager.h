@@ -71,6 +71,8 @@ class LockManager {
     txn_id_t upgrading_ = INVALID_TXN_ID;
     /** coordination */
     std::mutex latch_;
+    auto GrantLockForRow(Transaction *txn, LockMode lock_mode) -> bool;
+    auto GrantLockForTable(Transaction *txn, LockMode lock_mode) -> bool;
   };
 
   /**
@@ -91,14 +93,13 @@ class LockManager {
    * [LOCK_NOTE]
    *
    * GENERAL BEHAVIOUR:
-   *    Both LockTable() and LockRow() are blocking methods; they should wait till the lock is granted and then return.
+   *    Both LockTable() and LockRow() are blocking methods; they should wait till the lock is granted and then return. 
    *    If the transaction was aborted in the meantime, do not grant the lock and return false.
    *
    *
    * MULTIPLE TRANSACTIONS:
    *    LockManager should maintain a queue for each resource; locks should be granted to transactions in a FIFO manner.
-   *    If there are multiple compatible lock requests, all should be granted at the same time
-   *    as long as FIFO is honoured.
+   *    If there are multiple compatible lock requests, all should be granted at the same time as long as FIFO is honoured.
    *
    * SUPPORTED LOCK MODES:
    *    Table locking should support all lock modes.
@@ -134,10 +135,10 @@ class LockManager {
    *
    *
    * MULTILEVEL LOCKING:
-   *    While locking rows, Lock() should ensure that the transaction has an appropriate lock on the table which the row
-   *    belongs to. For instance, if an exclusive lock is attempted on a row, the transaction must hold either
-   *    X, IX, or SIX on the table. If such a lock does not exist on the table, Lock() should set the TransactionState
-   *    as ABORTED and throw a TransactionAbortException (TABLE_LOCK_NOT_PRESENT)
+   *    While locking rows, Lock() should ensure that the transaction has an appropriate lock on the table which the
+   *    row belongs to. For instance, if an exclusive lock is attempted on a row, the transaction must hold either X, IX,
+   *    or SIX on the table. If such a lock does not exist on the table, Lock() should set the TransactionState as
+   *    ABORTED and throw a TransactionAbortException (TABLE_LOCK_NOT_PRESENT)
    *
    *
    * LOCK UPGRADE:
@@ -176,8 +177,8 @@ class LockManager {
    *    a TransactionAbortException (ATTEMPTED_UNLOCK_BUT_NO_LOCK_HELD)
    *
    *    Additionally, unlocking a table should only be allowed if the transaction does not hold locks on any
-   *    row on that table. If the transaction holds locks on rows of the table, Unlock should set the Transaction State
-   *    as ABORTED and throw a TransactionAbortException (TABLE_UNLOCKED_BEFORE_UNLOCKING_ROWS).
+   *    row on that table. If the transaction holds locks on rows of the table, Unlock should set the Transaction
+   *    State as ABORTED and throw a TransactionAbortException (TABLE_UNLOCKED_BEFORE_UNLOCKING_ROWS).
    *
    *    Finally, unlocking a resource should also grant any new lock requests for the resource (if possible).
    *
