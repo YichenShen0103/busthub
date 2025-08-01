@@ -93,13 +93,14 @@ class LockManager {
    * [LOCK_NOTE]
    *
    * GENERAL BEHAVIOUR:
-   *    Both LockTable() and LockRow() are blocking methods; they should wait till the lock is granted and then return. 
+   *    Both LockTable() and LockRow() are blocking methods; they should wait till the lock is granted and then return.
    *    If the transaction was aborted in the meantime, do not grant the lock and return false.
    *
    *
    * MULTIPLE TRANSACTIONS:
    *    LockManager should maintain a queue for each resource; locks should be granted to transactions in a FIFO manner.
-   *    If there are multiple compatible lock requests, all should be granted at the same time as long as FIFO is honoured.
+   *    If there are multiple compatible lock requests, all should be granted at the same time as long as FIFO is
+   * honoured.
    *
    * SUPPORTED LOCK MODES:
    *    Table locking should support all lock modes.
@@ -136,8 +137,8 @@ class LockManager {
    *
    * MULTILEVEL LOCKING:
    *    While locking rows, Lock() should ensure that the transaction has an appropriate lock on the table which the
-   *    row belongs to. For instance, if an exclusive lock is attempted on a row, the transaction must hold either X, IX,
-   *    or SIX on the table. If such a lock does not exist on the table, Lock() should set the TransactionState as
+   *    row belongs to. For instance, if an exclusive lock is attempted on a row, the transaction must hold either X,
+   * IX, or SIX on the table. If such a lock does not exist on the table, Lock() should set the TransactionState as
    *    ABORTED and throw a TransactionAbortException (TABLE_LOCK_NOT_PRESENT)
    *
    *
@@ -299,6 +300,8 @@ class LockManager {
   auto RunCycleDetection() -> void;
 
  private:
+  auto DFS(std::vector<txn_id_t> cycle_vector, bool &is_cycle, txn_id_t *txn_id) -> void;
+
   /** Fall 2022 */
   /** Structure that holds lock requests for a given table oid */
   std::unordered_map<table_oid_t, std::shared_ptr<LockRequestQueue>> table_lock_map_;

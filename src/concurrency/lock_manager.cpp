@@ -503,21 +503,144 @@ auto LockManager::UnlockRow(Transaction *txn, const table_oid_t &oid, const RID 
   return true;
 }
 
-void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {}
+void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {
+  std::unique_lock<std::mutex> lock(waits_for_latch_);
+  bool is_present = false;
+  for (auto a : waits_for_[t1]) {
+    if (a == t2) {
+      break;
+      is_present = true;
+    }
+  }
+  if (!is_present) {
+    waits_for_[t1].push_back(t2);
+    std::sort(waits_for_[t1].begin(), waits_for_[t1].end());
+  }
+}
 
-void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {}
+void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {
+  std::unique_lock<std::mutex> lock(waits_for_latch_);
+  for (auto iter = waits_for_[t1].begin(); iter != waits_for_[t1].begin(); iter++) {
+    if (*iter == t2) {
+      iter = waits_for_[t1].erase(iter);
+    }
+  }
+}
 
-auto LockManager::HasCycle(txn_id_t *txn_id) -> bool { return false; }
+auto LockManager::DFS(std::vector<txn_id_t> cycle_vector, bool &is_cycle, txn_id_t *txn_id) -> void {
+  if (waits_for_.find(cycle_vector[cycle_vector.size() - 1]) == waits_for_.end()) {
+    return;
+  }
+  for (auto txn : waits_for_[cycle_vector[cycle_vector.size() - 1]]) {
+    if (is_cycle) {
+      return;
+    }
+    auto iter = std::find(cycle_vector.begin(), cycle_vector.end(), txn);
+    if (iter != cycle_vector.end()) {
+      is_cycle = true;
+      *txn_id = *iter;
+      while (iter != cycle_vector.end()) {
+        if (*txn_id < *iter) {
+          *txn_id = *iter;
+        }
+        iter++;
+      }
+      auto transaction = TransactionManager::GetTransaction(*txn_id);
+      transaction->SetState(TransactionState::ABORTED);
+    }
+    if (!is_cycle) {
+      cycle_vector.push_back(txn);
+      DFS(cycle_vector, is_cycle, txn_id);
+      cycle_vector.pop_back();
+    }
+  }
+}
+
+auto LockManager::HasCycle(txn_id_t *txn_id) -> bool {
+  std::vector<txn_id_t> txn_vector;
+  txn_vector.reserve(waits_for_.size());
+  for (const auto &wait : waits_for_) {
+    txn_vector.push_back(wait.first);
+  }
+  std::sort(txn_vector.begin(), txn_vector.end(), std::greater<>());
+  for (auto txn : txn_vector) {
+    std::vector<txn_id_t> cycle_vector;
+    bool is_cycle = false;
+    cycle_vector.push_back(txn);
+    DFS(cycle_vector, is_cycle, txn_id);
+    if (is_cycle) {
+      return true;
+    }
+  }
+  return false;
+}
 
 auto LockManager::GetEdgeList() -> std::vector<std::pair<txn_id_t, txn_id_t>> {
+  std::unique_lock<std::mutex> lock(waits_for_latch_);
   std::vector<std::pair<txn_id_t, txn_id_t>> edges(0);
+  for (const auto &waits : waits_for_) {
+    for (auto value : waits.second) {
+      edges.emplace_back(waits.first, value);
+    }
+  }
+
   return edges;
 }
 
 void LockManager::RunCycleDetection() {
   while (enable_cycle_detection_) {
     std::this_thread::sleep_for(cycle_detection_interval);
-    {  // TODO(students): detect deadlock
+    {
+      waits_for_latch_.lock();
+      table_lock_map_latch_.lock();
+      for (const auto &table_pairs : table_lock_map_) {
+        table_pairs.second->latch_.lock();
+        for (auto i_request : table_pairs.second->request_queue_) {
+          for (auto j_request : table_pairs.second->request_queue_) {
+            if (j_request->granted_ && !i_request->granted_ &&
+                !Compatible({j_request->lock_mode_}, i_request->lock_mode_)) {
+              AddEdge(i_request->txn_id_, j_request->txn_id_);
+            }
+          }
+        }
+        table_pairs.second->latch_.unlock();
+      }
+      table_lock_map_latch_.unlock();
+
+      row_lock_map_latch_.lock();
+      for (const auto &row_pairs : row_lock_map_) {
+        row_pairs.second->latch_.lock();
+        for (auto i_request : row_pairs.second->request_queue_) {
+          for (auto j_request : row_pairs.second->request_queue_) {
+            if (j_request->granted_ && !i_request->granted_ &&
+                !Compatible({j_request->lock_mode_}, i_request->lock_mode_)) {
+              AddEdge(i_request->txn_id_, j_request->txn_id_);
+            }
+          }
+        }
+        row_pairs.second->latch_.unlock();
+      }
+      row_lock_map_latch_.unlock();
+
+      txn_id_t txn_id;
+      while (HasCycle(&txn_id)) {
+        for (const auto &wait : waits_for_) {
+          RemoveEdge(wait.first, txn_id);
+        }
+        waits_for_.erase(txn_id);
+        table_lock_map_latch_.lock();
+        for (const auto &table_pairs : table_lock_map_) {
+          table_pairs.second->cv_.notify_all();
+        }
+        table_lock_map_latch_.unlock();
+
+        row_lock_map_latch_.lock();
+        for (const auto &row_pairs : row_lock_map_) {
+          row_pairs.second->cv_.notify_all();
+        }
+        row_lock_map_latch_.unlock();
+      }
+      waits_for_latch_.unlock();
     }
   }
 }
