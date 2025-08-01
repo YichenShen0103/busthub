@@ -1,4 +1,4 @@
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===//
 //
 //                         BusTub
 //
@@ -17,6 +17,7 @@
 #include <list>
 #include <memory>
 #include <mutex>  // NOLINT
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -48,7 +49,6 @@ class LockManager {
         : txn_id_(txn_id), lock_mode_(lock_mode), oid_(oid) {}
     LockRequest(txn_id_t txn_id, LockMode lock_mode, table_oid_t oid, RID rid) /** Row lock request */
         : txn_id_(txn_id), lock_mode_(lock_mode), oid_(oid), rid_(rid) {}
-
     /** Txn_id of the txn requesting the lock */
     txn_id_t txn_id_;
     /** Locking mode of the requested lock */
@@ -63,6 +63,14 @@ class LockManager {
 
   class LockRequestQueue {
    public:
+    LockRequestQueue() = default;
+    ~LockRequestQueue() {
+      for (auto iter = request_queue_.begin(); iter != request_queue_.end();) {
+        auto i = *iter;
+        request_queue_.erase(iter++);
+        delete i;
+      }
+    }
     /** List of lock requests for the same resource (table or row) */
     std::list<LockRequest *> request_queue_;
     /** For notifying blocked transactions on this rid */
@@ -71,8 +79,8 @@ class LockManager {
     txn_id_t upgrading_ = INVALID_TXN_ID;
     /** coordination */
     std::mutex latch_;
-    auto GrantLockForRow(Transaction *txn, LockMode lock_mode) -> bool;
     auto GrantLockForTable(Transaction *txn, LockMode lock_mode) -> bool;
+    auto GrantLockForRow(Transaction *txn, LockMode lock_mode) -> bool;
   };
 
   /**
@@ -99,8 +107,8 @@ class LockManager {
    *
    * MULTIPLE TRANSACTIONS:
    *    LockManager should maintain a queue for each resource; locks should be granted to transactions in a FIFO manner.
-   *    If there are multiple compatible lock requests, all should be granted at the same time as long as FIFO is
-   * honoured.
+   *    If there are multiple compatible lock requests, all should be granted at the same time
+   *    as long as FIFO is honoured.
    *
    * SUPPORTED LOCK MODES:
    *    Table locking should support all lock modes.
@@ -136,10 +144,10 @@ class LockManager {
    *
    *
    * MULTILEVEL LOCKING:
-   *    While locking rows, Lock() should ensure that the transaction has an appropriate lock on the table which the
-   *    row belongs to. For instance, if an exclusive lock is attempted on a row, the transaction must hold either X,
-   * IX, or SIX on the table. If such a lock does not exist on the table, Lock() should set the TransactionState as
-   *    ABORTED and throw a TransactionAbortException (TABLE_LOCK_NOT_PRESENT)
+   *    While locking rows, Lock() should ensure that the transaction has an appropriate lock on the table which the row
+   *    belongs to. For instance, if an exclusive lock is attempted on a row, the transaction must hold either
+   *    X, IX, or SIX on the table. If such a lock does not exist on the table, Lock() should set the TransactionState
+   *    as ABORTED and throw a TransactionAbortException (TABLE_LOCK_NOT_PRESENT)
    *
    *
    * LOCK UPGRADE:
@@ -178,8 +186,8 @@ class LockManager {
    *    a TransactionAbortException (ATTEMPTED_UNLOCK_BUT_NO_LOCK_HELD)
    *
    *    Additionally, unlocking a table should only be allowed if the transaction does not hold locks on any
-   *    row on that table. If the transaction holds locks on rows of the table, Unlock should set the Transaction
-   *    State as ABORTED and throw a TransactionAbortException (TABLE_UNLOCKED_BEFORE_UNLOCKING_ROWS).
+   *    row on that table. If the transaction holds locks on rows of the table, Unlock should set the Transaction State
+   *    as ABORTED and throw a TransactionAbortException (TABLE_UNLOCKED_BEFORE_UNLOCKING_ROWS).
    *
    *    Finally, unlocking a resource should also grant any new lock requests for the resource (if possible).
    *
@@ -299,11 +307,9 @@ class LockManager {
    */
   auto RunCycleDetection() -> void;
 
- private:
   auto DFS(std::vector<txn_id_t> cycle_vector, bool &is_cycle, txn_id_t *txn_id) -> void;
-  auto AddEdgeInternal(txn_id_t t1, txn_id_t t2) -> void;
-  auto RemoveEdgeInternal(txn_id_t t1, txn_id_t t2) -> void;
 
+ private:
   /** Fall 2022 */
   /** Structure that holds lock requests for a given table oid */
   std::unordered_map<table_oid_t, std::shared_ptr<LockRequestQueue>> table_lock_map_;
@@ -318,7 +324,7 @@ class LockManager {
   std::atomic<bool> enable_cycle_detection_;
   std::thread *cycle_detection_thread_;
   /** Waits-for graph representation. */
-  std::unordered_map<txn_id_t, std::vector<txn_id_t>> waits_for_;
+  std::unordered_map<txn_id_t, std::set<txn_id_t>> waits_for_;
   std::mutex waits_for_latch_;
 };
 
